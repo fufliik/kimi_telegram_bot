@@ -1,10 +1,9 @@
 
 import asyncio
 from dotenv import load_dotenv
-from get import *
-from load import *
-from check import *
-from logs import *
+
+from main_video import *
+from main_audio import *
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
@@ -61,28 +60,20 @@ def quality_keyboard(formats):
         ]
     )
 #--------------------------------------------------------------------------------------------------
-user_logs = {}
-
+#--------------------------------------------------------------------------------------------------
 
 @dp.callback_query(F.data == "video_")
 async def video(callback: CallbackQuery):
     url = user_urls.get(callback.from_user.id)
-    log = "🎬 Выбрал видео\n\n"
-    user_logs[callback.from_user.id] = log
-
     if not url:
         await callback.message.edit_text("❌ Ссылка не найдена")
-        log += f"❌ Ссылка не найдена: {url}\n"
         return
 
-    quality = await asyncio.to_thread(get_qualities_video, url)
+    quality = await asyncio.to_thread(video_get_qualities, url)
 
     if quality is None:
         await callback.message.edit_text("❗ Не удалось найти информацию о файле")
         return
-
-    log += f"⚙️ Доступные качества: {quality}\n"
-    user_logs[callback.from_user.id] = log
 
     await callback.message.edit_text("⚙️ Какое качество хотите получить?", reply_markup=quality_keyboard(quality))
 
@@ -91,101 +82,61 @@ async def video(callback: CallbackQuery):
 async def quality_video(callback: CallbackQuery) -> None:
     url = user_urls.get(callback.from_user.id)
     file = None
-    quality = callback.data.split(":")[1]
-    log = user_logs[callback.from_user.id]
+    quality = callback.data.split(":", 1)[1]
 
-    log += f" Выбраное качество:  {quality}\n"
-    try:
-        await callback.message.edit_text("🔍 Проверка размера...")
-        size, allowed_size = await asyncio.to_thread(check_video_size, url, quality)
-        log += f"📦 Размера файла: {size:.2f} MB\n"
-
-        if size is None:
-            await callback.message.edit_text("❌ Не удалось определить размер видео.")
-            return
-
-        if not allowed_size:
-            await callback.message.edit_text(
-                "⚠️ Видео слишком большое!\n\n"
-                f"Размер файла — {size:.2f} MB\nМаксимальный размер — 2000 MB."
-            )
-            return
-
-        await callback.message.edit_text("⬇️ Загрузка...")
-        log += "⬇️ Загрузка...\n\n"
-        file, title = await asyncio.to_thread(video_load, url, quality)
-
-        log += ("🖥️ Загружен на сервер: \n\n"
-                f"📁 Путь: {file}\n\n"
-                f"📄 Название: {title}\n\n")
-
-        await callback.message.answer_video(FSInputFile(file, filename=f"{title}.mp4"))
-
-    except Exception as e:
-        await callback.message.edit_text("❌ Возникла ошибка!..")
-        log += f"❌ Возникла ошибка!.. {e}\n"
-    finally:
-        if file and os.path.exists(file):
-            os.remove(file)
-            log += "🗑️ Временный файл удалён\n"
-        else:
-            log += "❌ Временный файл не обнаружен\n"
-
-        await send_log(callback, log, url=url)
-        user_logs.pop(callback.from_user.id, None)
-
-#==================================================================================================
-@dp.callback_query(F.data == "audio_")
-async def audio_video(callback: CallbackQuery) -> None:
-    url = user_urls.get(callback.from_user.id)
-    file = None
-    log = "🎵 Выбрал аудио\n"
     try:
         if not url:
             await callback.message.edit_text("❌ Ссылка не найдена")
-            log += f"❌ Ссылка не найдена -> {url}\n"
-            return
-
-        await callback.message.edit_text("🔍 Проверка размера...")
-        size, allowed_size = await asyncio.to_thread(check_audio_size, url)
-        log += f"📦 Размера файла: {size:.2f} MB\n"
-
-        if allowed_size is None:
-            await callback.message.edit_text("❌ Не удалось определить размер аудио.")
-            return
-
-        if not allowed_size:
-            await callback.message.edit_text(
-                "⚠️ Аудио слишком большое!\n\n"
-                f"Размер файла — {size:.2f} MB\nМаксимальный размер — 1500 MB."
-            )
             return
 
         await callback.message.edit_text("⬇️ Загрузка...")
-        log += "⬇️ Загрузка...\n\n"
-        file, title = await asyncio.to_thread(audio_load, url)
+        video_result = await asyncio.to_thread(video_cheker, url, quality)
 
-        log += ("🖥️ Загружен на сервер: \n\n"
-                f"📁 Путь: {file}\n\n"
-                f"📄 Название: {title}\n\n")
+        if not video_result:
+            await callback.message.edit_text("❌ Не удалось загрузить файл...")
+            return
 
-        await callback.message.answer_audio(FSInputFile(file, filename=f"{title}.mp3"))
-    except Exception as e:
+        file, title = video_result
+
+        await callback.message.answer_video(FSInputFile(file, filename=f"{title}.mp4"))
+        await callback.message.delete()
+
+    except Exception:
         await callback.message.edit_text("❌ Возникла ошибка!..")
 
-        log += f"❌ Возникла ошибка!.. {e}\n"
     finally:
         if file and os.path.exists(file):
             os.remove(file)
-            log += "🗑️ Временный файл удалён\n"
-        else:
-            log += "❌ Временный файл не обнаружен\n"
-
-        await send_log(callback, log, url=url)
 
 
+#==================================================================================================
+@dp.callback_query(F.data == "audio_")
+async def audio(callback: CallbackQuery) -> None:
+    url = user_urls.get(callback.from_user.id)
+    file = None
+    try:
+        if not url:
+            await callback.message.edit_text("❌ Ссылка не найдена")
+            return
 
+        await callback.message.edit_text("⬇️ Загрузка...")
+        audio_result =await asyncio.to_thread(audio_cheker, url)
 
+        if not audio_result:
+            await callback.message.edit_text("❌ Не удалось загрузить файл...")
+            return
+
+        file, title = audio_result
+
+        await callback.message.answer_audio(FSInputFile(file, filename=f"{title}.mp3"))
+        await callback.message.delete()
+
+    except Exception:
+        await callback.message.edit_text("❌ Возникла ошибка!..")
+
+    finally:
+        if file and os.path.exists(file):
+            os.remove(file)
 
 
 async def main() -> None:
